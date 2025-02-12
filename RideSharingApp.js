@@ -1,16 +1,40 @@
 const DRIVERS_API_URL = "https://jsonplaceholder.typicode.com/users";
 const USERS_API_URL = "https://randomuser.me/api/";
 
+class RideEventManager {
+    constructor() {
+        this.subscribers = new Map(); // { rideId: [{ observer, role }] }
+    }
+
+    subscribe(rideId, observer, role) {
+        if (!this.subscribers.has(rideId)) {
+            this.subscribers.set(rideId, []);
+        }
+        this.subscribers.get(rideId).push({ observer, role });
+    }
+
+    notify(rideId, userMessage, driverMessage) {
+        if (this.subscribers.has(rideId)) {
+            this.subscribers.get(rideId).forEach(({ observer, role }) => {
+                const message = role === "user" ? userMessage : driverMessage;
+                observer.update(message);
+            });
+        }
+    }
+}
+
+
 class RideSharingApp {
     static #instance = null;
     #activeRides = new Map();
     #availableDrivers = new Map();
+    #availableVIPDrivers = new Map();
 
     constructor() {
         if (RideSharingApp.#instance) {
             return RideSharingApp.#instance;
         }
-        
+
         RideSharingApp.#instance = this;
     }
 
@@ -26,8 +50,14 @@ class RideSharingApp {
             const response = await fetch(DRIVERS_API_URL);
             const driversData = await response.json();
             driversData.forEach(data => {
-                const driver = new Driver(data.name, data.id);
-                this.#availableDrivers.set(data.id, driver);
+                const isVIP = Math.random() > 0.5; // make some VIPDrivers
+                const driver = isVIP ? new VIPDriver(data.name, data.id) : new Driver(data.name, data.id);
+
+                if (isVIP) {
+                    this.#availableVIPDrivers.set(data.id, driver);
+                } else {
+                    this.#availableDrivers.set(data.id, driver);
+                }
             });
         } catch (error) {
             console.error('Error fetching drivers!', error);
@@ -35,39 +65,56 @@ class RideSharingApp {
         }
     }
 
-    getAvailableDriver() {
-        for (const [_, driver] of this.#availableDrivers) {
-            if (driver.isAvailable) {
-                return driver;
-            }
-        }
-        return null;
+    getAllDrivers() {
+        return { regular: this.#availableDrivers, vip: this.#availableVIPDrivers };
     }
 
-    getAllDrivers() {
-        return this.#availableDrivers;
+    getAvailableDriver(preferVIP = false) { // generator to find a driver match
+        function* findAvailable(map) {
+            for (const driver of map.values()) {
+                if (driver.isAvailable) yield driver;
+            }
+        }
+
+        // fall back to regular drivers if no VIP available
+        return preferVIP ? findAvailable(this.#availableVIPDrivers).next().value || findAvailable(this.#availableDrivers).next().value || null
+            : findAvailable(this.#availableDrivers).next().value || null;
     }
 
     getActiveRides() {
         return this.#activeRides;
     }
 
-    createRide(user, pickupLocation, dropoffLocation) {
+    createRide(user, pickupLocation, dropoffLocation, preferVIP = false) {
         const ride = new Ride(user, pickupLocation, dropoffLocation);
-        const availableDriver = this.getAvailableDriver();
-        
-        if (availableDriver) {
-            ride.assignDriver(availableDriver);
-            availableDriver.isAvailable = false;
-            this.#activeRides.set(ride.id, ride);
-        } else {
+        const availableDriver = this.getAvailableDriver(preferVIP);
+    
+        if (!availableDriver) {
             throw new Error("All drivers are busy, please try again later.");
         }
-        
-        console.log(`Ride created for ${user.name} from ${pickupLocation} to ${dropoffLocation}.`);
+    
+        ride.assignDriver(availableDriver);
+        availableDriver.isAvailable = false;
+        this.#activeRides.set(ride.id, ride);
+    
+        // check if assigned driver is vip
+        const isVIPDriver = this.#availableVIPDrivers.has(availableDriver.id);
 
+        if (preferVIP && !isVIPDriver) {
+            console.log(
+                `Unfortunately, no VIP drivers were available. A regular driver has been assigned.`
+            );
+        }
+        
+        console.log(
+            isVIPDriver
+                ? `VIP Ride created for ${user.name} from ${pickupLocation} to ${dropoffLocation}. VIP Driver: ${availableDriver.name}`
+                : `Ride created for ${user.name} from ${pickupLocation} to ${dropoffLocation}. Driver: ${availableDriver.name}`
+        );
+    
         return ride;
     }
+    
 
     completeRide(ride) {
         ride.complete();
@@ -87,6 +134,10 @@ class User {
     getTotalSpending() {
         return UserFactory.getUserSpending(this.id);
     }
+
+    update(message) {
+        console.log(message);
+    }
 }
 
 class PremiumUser extends User {
@@ -102,7 +153,7 @@ class PremiumUser extends User {
 }
 
 class UserFactory {
-    static #PREMIUM_THRESHOLD = 1000;
+    static #PREMIUM_THRESHOLD = 100;
     static #userSpending = new Map();
     static #activeUsers = new Map();
 
@@ -111,10 +162,10 @@ class UserFactory {
             const response = await fetch(`${USERS_API_URL}`);
             const data = await response.json();
             const userData = data.results[0];
-            
+
             const userId = userData.login.uuid; // generates an id for the user
             const name = `${userData.name.first} ${userData.name.last}`;
-            
+
             return this.createUser(userId, name);
         } catch (error) {
             console.error('Error fetching user!', error);
@@ -142,7 +193,7 @@ class UserFactory {
     static #upgradeUserToPremium(user) {
         const premiumUser = new PremiumUser(user.id, user.name);
         UserFactory.#activeUsers.set(user.id, premiumUser);
-        console.log(`Congratulations! ${user.name} has been upgraded to Premium status!`);
+        console.log(`${user.name} has been upgraded to Premium status! They are now eligible for a Premium Client discount of 20%`);
         return premiumUser;
     }
 
@@ -157,7 +208,7 @@ class UserFactory {
 
 class Ride {
     static #nextId = 1;
-    id;
+    static eventManager = new RideEventManager();
 
     constructor(user, pickupLocation, dropoffLocation) {
         this.id = Ride.#nextId++;
@@ -166,35 +217,60 @@ class Ride {
         this.dropoffLocation = dropoffLocation;
         this.status = "pending";
         this.driver = null;
-        this.fare = this.calculateFare();
+        this.fare = 0;
     }
 
     get user() {
         return UserFactory.getUser(this.userId);
     }
 
-    calculateFare() {
-        const baseFare = Math.floor(Math.random() * 41) + 10;
+    calculateFare(driver) {
+        let baseFare = Math.floor(Math.random() * 41) + 10; // $10 - $50
+
         if (this.user instanceof PremiumUser) {
-            const discount = this.user.getDiscount();
-            return baseFare * (1 - discount / 100);
+            baseFare *= 0.8;
         }
+
+        if (driver instanceof VIPDriver) {
+            baseFare *= driver.getPremiumRate();
+        }
+
         return baseFare;
     }
 
     assignDriver(driver) {
         this.driver = driver;
+        this.fare = this.calculateFare(driver);
         this.status = "active";
+    
+        Ride.eventManager.subscribe(this.id, driver, "driver");
+        Ride.eventManager.subscribe(this.id, this.user, "user");
+    
+        Ride.eventManager.notify(
+            this.id,
+            `Your driver ${driver.name} is on the way to ${this.pickupLocation}`,
+            `Driver ${driver.name}, client ${this.user.name} awaits you at ${this.pickupLocation}`
+        );
     }
+    
 
     complete() {
         this.status = "completed";
         let user = this.user;
         user = UserFactory.addUserSpending(user, this.fare);
-        console.log(`Ride completed. Fare: $${this.fare}`);
+        this.driver.addToBalance(this.fare * 0.8); // driver cut
+    
+        Ride.eventManager.notify(
+            this.id,
+            `Your ride has been completed. Fare: $${this.fare}`,   // Message for user
+            `Ride with client ${user.name} is completed. Fare: $${this.fare}`  // Message for driver
+        );
+    
         console.log(`Total spending for ${user.name}: $${user.getTotalSpending()}`);
     }
+    
 }
+
 
 class Driver {
     #balance = 0;
@@ -212,6 +288,10 @@ class Driver {
     addToBalance(amount) {
         this.#balance += amount;
     }
+
+    update(message) {
+        console.log(message)
+    }
 }
 
 class VIPDriver extends Driver {
@@ -226,6 +306,15 @@ class VIPDriver extends Driver {
     }
 }
 
+
+
+
+
+
+
+
+// manual checks
+
 (async () => {
     const app = RideSharingApp.getInstance();
 
@@ -235,21 +324,17 @@ class VIPDriver extends Driver {
 
     // Create users using the UserFactory
     const user1 = await UserFactory.fetchAndCreateUser();
-    const user2 = await UserFactory.fetchAndCreateUser();
-    console.log(`Users created: ${user1.name}, ${user2.name}`);
 
     // Request rides for users
     try {
-        const ride1 = app.createRide(user1, "Downtown", "Airport");
-        const ride2 = app.createRide(user2, "Suburb", "City Center");
+        app.createRide(user1, "Downtown", "Airport");
+        app.createRide(user1, "Suburb", "City Center", true);
+        app.createRide(user1, "Suburb", "City Center", true);
+        app.createRide(user1, "Suburb", "City Center", true);
+        app.createRide(user1, "Suburb", "City Center", true);
     } catch (error) {
         console.error(error.message);
     }
-
-    // Check active rides
-    console.log(app.getActiveRides());
-
-    console.log(app.getAllDrivers());
 
     // Complete all rides
     const activeRides = Array.from(app.getActiveRides().values());
@@ -257,5 +342,5 @@ class VIPDriver extends Driver {
         app.completeRide(ride);
     }
 
-    
+
 })();
