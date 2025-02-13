@@ -68,25 +68,42 @@ class RideSharingApp {
         return { regular: this.#availableDrivers, vip: this.#availableVIPDrivers };
     }
 
-    getAvailableDriver(preferVIP = false) { // generator to find a driver match
+    getAvailableDriver(preferVIP = false) { // generator to find a driver match with delay
         function* findAvailable(map) {
             for (const driver of map.values()) {
                 if (driver.isAvailable) yield driver;
             }
         }
-
-        // fall back to regular drivers if no VIP available
-        return preferVIP ? findAvailable(this.#availableVIPDrivers).next().value || findAvailable(this.#availableDrivers).next().value || null
-            : findAvailable(this.#availableDrivers).next().value || null;
+    
+        // promise resolves after a delay
+        function simulateMatching() {
+            return new Promise(function(resolve) {
+                setTimeout(function() {
+                    resolve();
+                }, Math.random() * 3000 + 1000);
+            });
+        }
+        
+        return simulateMatching().then(() => {
+            // Fall back to regular drivers if no VIP available
+            if (preferVIP) {
+                const vipDriver = findAvailable(this.#availableVIPDrivers).next().value;
+                if (vipDriver) return vipDriver;
+                return findAvailable(this.#availableDrivers).next().value || null;
+            }
+    
+            // Just look for regular drivers
+            return findAvailable(this.#availableDrivers).next().value || null;
+        });
     }
 
     getActiveRides() {
         return this.#activeRides;
     }
 
-    createRide(user, pickupLocation, dropoffLocation, preferVIP = false) {
+    async createRide(user, pickupLocation, dropoffLocation, preferVIP = false) {
         const ride = new Ride(user, pickupLocation, dropoffLocation);
-        const availableDriver = this.getAvailableDriver(preferVIP);
+        const availableDriver = await this.getAvailableDriver(preferVIP);
     
         if (!availableDriver) {
             throw new Error("All drivers are busy, please try again later.");
@@ -337,6 +354,9 @@ class VIPDriver extends Driver {
 
     // Create users using the UserFactory (happy path)
     const user1 = await UserFactory.createUser("Bobi");
+    const user2 = await UserFactory.createUser("Ani");
+    const user3 = await UserFactory.createUser("Georgi");
+    const user4 = await UserFactory.createUser("Ivan");
 
     // Attempt user creation through the User class (should throw an error)
     try {
@@ -352,21 +372,17 @@ class VIPDriver extends Driver {
         console.error(error.message);
     }
 
-    console.log("-----------------")
-
     // Create rides for users - each one should notify both the driver and the user + display a general message
+    // make user 'Bobi' premium
     try {
-        app.createRide(user1, "Downtown", "Airport");
-        console.log("-----------------")
-        app.createRide(user1, "Home", "Office", true);
-        console.log("-----------------")
-        // should make this user Premium
-        app.createRide(user1, "Suburb", "City Center", true);
-        console.log("-----------------")
-        app.createRide(user1, "Suburb", "City Center", true);
-        console.log("-----------------")
-        app.createRide(user1, "Suburb", "City Center", true);
-        console.log("-----------------")
+        await app.createRide(user1, "Downtown", "Airport");
+        await app.createRide(user2, "Home", "Office", true);
+        await app.createRide(user3, "School", "Home", true);
+        await app.createRide(user4, "Suburb", "City Center", true);
+        await app.createRide(user1, "Suburb", "City Center", true);
+        await app.createRide(user1, "Airport", "Downtown", true);
+        await app.createRide(user1, "Airport", "Downtown", true);
+        await app.createRide(user1, "Airport", "Downtown", true);
     } catch (error) {
         console.error(error.message);
     }
@@ -376,6 +392,7 @@ class VIPDriver extends Driver {
     for (const ride of activeRides) {
          app.completeRide(ride);
     }
+
 
 
 })();
