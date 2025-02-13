@@ -1,5 +1,7 @@
 const DRIVERS_API_URL = "https://jsonplaceholder.typicode.com/users";
-const USERS_API_URL = "https://randomuser.me/api/";
+
+
+// TODO - allow the creation of user through the factory only - make constructors private
 
 class RideEventManager {
     constructor() {
@@ -157,24 +159,10 @@ class UserFactory {
     static #userSpending = new Map();
     static #activeUsers = new Map();
 
-    static async fetchAndCreateUser() {
-        try {
-            const response = await fetch(`${USERS_API_URL}`);
-            const data = await response.json();
-            const userData = data.results[0];
-
-            const userId = userData.login.uuid; // generates an id for the user
-            const name = `${userData.name.first} ${userData.name.last}`;
-
-            return this.createUser(userId, name);
-        } catch (error) {
-            console.error('Error fetching user!', error);
-            throw error;
-        }
-    }
-
-    static createUser(id, name) {
+    static createUser(name) {
+        const id = crypto.randomUUID();
         const user = new User(id, name);
+        console.log(user.name, user.id);
         UserFactory.#activeUsers.set(id, user);
         return user;
     }
@@ -323,7 +311,7 @@ class VIPDriver extends Driver {
     console.log("Drivers fetched and available.");
 
     // Create users using the UserFactory
-    const user1 = await UserFactory.fetchAndCreateUser();
+    const user1 = await UserFactory.createUser("Bobi");
 
     // Request rides for users
     try {
