@@ -1,8 +1,5 @@
 const DRIVERS_API_URL = "https://jsonplaceholder.typicode.com/users";
 
-
-// TODO - allow the creation of user through the factory only - make constructors private
-
 class RideEventManager {
     constructor() {
         this.subscribers = new Map(); // { rideId: [{ observer, role }] }
@@ -128,10 +125,26 @@ class RideSharingApp {
 }
 
 class User {
-    constructor(id, name) {
-        this.id = id;
-        this.name = name;
+
+    #id;
+    #name;
+
+    constructor(key, id, name) {
+        if (key !== UserFactory.getUserKey()) {  // Prevents direct creation
+            throw new Error("User instances must be created through UserFactory!");
+        }
+        this.#id = id;
+        this.#name = name;
     }
+
+    get id() {
+        return this.#id;
+    }
+
+    get name() {
+        return this.#name;
+    }
+
 
     getTotalSpending() {
         return UserFactory.getUserSpending(this.id);
@@ -145,8 +158,11 @@ class User {
 class PremiumUser extends User {
     #discountPercentage = 20;
 
-    constructor(id, name) {
-        super(id, name);
+    constructor(key, id, name) {
+        if (key !== UserFactory.getUserKey()) {  
+            throw new Error("Cannot start as a Premium user!");
+        }
+        super(key, id, name);
     }
 
     getDiscount() {
@@ -155,15 +171,17 @@ class PremiumUser extends User {
 }
 
 class UserFactory {
+    // Private static key to enforce the creation of user/premium user only through the factory
+    static #USER_KEY = Symbol('UserKey');
     static #PREMIUM_THRESHOLD = 100;
     static #userSpending = new Map();
     static #activeUsers = new Map();
 
     static createUser(name) {
         const id = crypto.randomUUID();
-        const user = new User(id, name);
-        console.log(user.name, user.id);
+        const user = new User(UserFactory.#USER_KEY, id, name);
         UserFactory.#activeUsers.set(id, user);
+        console.log(`New user created - ${name}`);
         return user;
     }
 
@@ -179,18 +197,22 @@ class UserFactory {
     }
 
     static #upgradeUserToPremium(user) {
-        const premiumUser = new PremiumUser(user.id, user.name);
+        const premiumUser = new PremiumUser(UserFactory.#USER_KEY, user.id, user.name);
         UserFactory.#activeUsers.set(user.id, premiumUser);
         console.log(`${user.name} has been upgraded to Premium status! They are now eligible for a Premium Client discount of 20%`);
         return premiumUser;
     }
 
-    static getUserSpending(userId) {
-        return UserFactory.#userSpending.get(userId) || 0;
+    static getUserKey() {
+        return this.#USER_KEY;
     }
 
     static getUser(id) {
         return UserFactory.#activeUsers.get(id);
+    }
+
+    static getUserSpending(id) {
+        return UserFactory.#userSpending.get(id) || 0;
     }
 }
 
@@ -302,32 +324,57 @@ class VIPDriver extends Driver {
 
 
 // manual checks
-
 (async () => {
+    // app instance should exist
     const app = RideSharingApp.getInstance();
 
-    // Fetch drivers from the API
-    await app.getDrivers();
-    console.log("Drivers fetched and available.");
+    // fetch drivers
+    try {
+        await app.getDrivers();
+    } catch (error) {
+        console.error('Failed to fetch drivers:', error);
+    }
 
-    // Create users using the UserFactory
+    // Create users using the UserFactory (happy path)
     const user1 = await UserFactory.createUser("Bobi");
 
-    // Request rides for users
+    // Attempt user creation through the User class (should throw an error)
     try {
-        app.createRide(user1, "Downtown", "Airport");
-        app.createRide(user1, "Suburb", "City Center", true);
-        app.createRide(user1, "Suburb", "City Center", true);
-        app.createRide(user1, "Suburb", "City Center", true);
-        app.createRide(user1, "Suburb", "City Center", true);
+        const user2 = new User('InvalidKey', 2, 'Ani');
     } catch (error) {
         console.error(error.message);
     }
 
-    // Complete all rides
+    // Attempt Premium user creation through the PremiumUser class (should throw an error)
+    try {
+        const premiumUser = new PremiumUser('InvalidKey', 3, 'Nikolay');
+    } catch (error) {
+        console.error(error.message);
+    }
+
+    console.log("-----------------")
+
+    // Create rides for users - each one should notify both the driver and the user + display a general message
+    try {
+        app.createRide(user1, "Downtown", "Airport");
+        console.log("-----------------")
+        app.createRide(user1, "Home", "Office", true);
+        console.log("-----------------")
+        // should make this user Premium
+        app.createRide(user1, "Suburb", "City Center", true);
+        console.log("-----------------")
+        app.createRide(user1, "Suburb", "City Center", true);
+        console.log("-----------------")
+        app.createRide(user1, "Suburb", "City Center", true);
+        console.log("-----------------")
+    } catch (error) {
+        console.error(error.message);
+    }
+
+    // Complete all rides - each one should notify both the driver and the user
     const activeRides = Array.from(app.getActiveRides().values());
     for (const ride of activeRides) {
-        app.completeRide(ride);
+         app.completeRide(ride);
     }
 
 
