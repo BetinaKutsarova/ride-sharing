@@ -22,3 +22,5 @@ Design Patterns:
 - Lazy initialization
 - Generator function
 - Inheritance
+
+Run the project in the models directory with node index.js
