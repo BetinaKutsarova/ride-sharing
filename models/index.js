@@ -1,6 +1,7 @@
 import RideSharingApp from "../RideSharingApp.js";
 import RideEventManager from "./RideEventManager.js";
 import UserFactory from "./UserFactory.js";
+import User from "./User.js";
 import Driver from "./Driver.js";
 import VIPDriver from "./VIPDriver.js";
 import PremiumUser from "./PremiumUser.js";
